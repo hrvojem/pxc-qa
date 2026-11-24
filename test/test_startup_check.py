@@ -71,6 +71,38 @@ class TestProcesses(unittest.TestCase):
         self.assertEqual(processes.tail_lines('/nonexistent/node1.err'), [])
 
 
+class TestKillAfterFailedStart(unittest.TestCase):
+
+    def test_kills_only_the_launched_nodes_and_waits(self):
+        listings = [[(101, '/qa/conf/node1.cnf'), (102, '/qa/conf/node2.cnf'), (201, '/qa/w1/conf/node1.cnf')],
+                    [(102, '/qa/conf/node2.cnf'), (201, '/qa/w1/conf/node1.cnf')],
+                    [(201, '/qa/w1/conf/node1.cnf')]]
+        with mock.patch.object(processes, 'mysqld_processes', side_effect=lambda: listings.pop(0)), \
+                mock.patch.object(processes.os, 'kill') as kill, \
+                mock.patch.object(processes.time, 'sleep'):
+            pids = processes.kill_mysqld_for_confs(['/qa/conf/node1.cnf', '/qa//conf/node2.cnf'])
+        self.assertEqual(pids, [101, 102])
+        self.assertEqual([c.args for c in kill.call_args_list],
+                         [(101, processes.signal.SIGKILL), (102, processes.signal.SIGKILL)])
+        self.assertEqual(listings, [])
+
+    def test_nothing_running_kills_nothing(self):
+        with mock.patch.object(processes, 'mysqld_processes', return_value=[]), \
+                mock.patch.object(processes.os, 'kill') as kill, \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            processes.stop_nodes_after_failed_start(['/qa/conf/node1.cnf'])
+        kill.assert_not_called()
+        self.assertEqual(out.getvalue(), '')
+
+    def test_reports_what_it_killed(self):
+        listings = [[(101, '/qa/conf/node1.cnf')], []]
+        with mock.patch.object(processes, 'mysqld_processes', side_effect=lambda: listings.pop(0)), \
+                mock.patch.object(processes.os, 'kill'), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            processes.stop_nodes_after_failed_start(['/qa/conf/node1.cnf'])
+        self.assertIn('killed 1 mysqld process(es) it had started: 101', out.getvalue())
+
+
 class FakeNode:
     def __init__(self, conf_file='/qa/conf/node2.cnf', err_log='/nonexistent/node2.err', connects_after=None):
         self.conf_file = conf_file

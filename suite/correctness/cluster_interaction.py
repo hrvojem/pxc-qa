@@ -104,7 +104,9 @@ class ClusterInteraction(BaseTest):
         self.sysbench_run('test_one')
         self.sysbench_run('test_two')
         self.sysbench_run('test_three')
-        pxc_startup.StartCluster.join_new_node(self.node3, 4, debug=debug, encryption=encryption)
+        # Track the joined node so shutdown_nodes() and the exit cleanup stop it too.
+        self.pxc_nodes.append(pxc_startup.StartCluster.join_new_node(self.node3, 4, debug=debug,
+                                                                     encryption=encryption))
 
 
 cluster_interaction = ClusterInteraction()
