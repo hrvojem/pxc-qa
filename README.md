@@ -14,7 +14,7 @@ Prerequisites
 
 Before running the framework, make sure the test host has:
 
-- Python 3.
+- Python 3.9 or newer.
 - `mysql.connector` available to Python.
 - A PXC or PS binary tarball extracted on disk.
 - `socat` in `PATH` for PXC clusters with more than one node (used by xtrabackup-v2 SST).

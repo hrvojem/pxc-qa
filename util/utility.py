@@ -170,11 +170,11 @@ class Utility:
 
     @staticmethod
     def check_python_version():
-        """ Check python version. Raise error if the
-            version is 3.5 or lower
+        """ Exit with an error on Python older than 3.9, the oldest
+            version the framework runs on (it uses list[...] type hints).
         """
-        if sys.version_info < (3, 6):
-            print("\nError! You should use python 3.6 or greater\n")
+        if sys.version_info < (3, 9):
+            print("\nError! You should use python 3.9 or greater\n")
             exit(1)
 
     @staticmethod

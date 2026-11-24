@@ -6,6 +6,12 @@ import re
 import sys
 import time
 
+# Check before importing util/: on older Python its list[...] type hints
+# fail with a TypeError before Utility.check_python_version() could run.
+if sys.version_info < (3, 9):
+    print("\nError! You should use python 3.9 or greater\n")
+    sys.exit(1)
+
 from config import WORKDIR, NODE, PT_BASEDIR, BASEDIR, SERVER, PXC_LOWER_BASE, PXC_UPPER_BASE, SKIP_TEST_EXIT_CODE
 from util import pxc_startup, ps_startup
 from util.db_connection import SHUTDOWN_TIMEOUT
