@@ -218,6 +218,11 @@ class StartCluster:
         if not os.path.isfile(os.path.join(base_dir, 'bin', 'mysqld')):
             print(os.path.join(base_dir, 'bin', 'mysqld') + ' does not exist')
             result = 1
+        # xtrabackup-v2 SST (conf/pxc.cnf) streams data with socat. Without it
+        # every joiner's SST fails and the node never comes up.
+        if self.__number_of_nodes > 1 and shutil.which('socat') is None:
+            print('socat is not in PATH; it is required for xtrabackup-v2 SST between cluster nodes')
+            result = 1
         utility_cmd = utility.Utility(self.__debug)
         utility_cmd.check_testcase(result, "Startup sanity check")
 

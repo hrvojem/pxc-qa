@@ -12,8 +12,9 @@ import glob
 import os
 import re
 import signal
-import subprocess
 import time
+
+from util import processes
 
 # (description, pattern) pairs. Each pattern is matched against one log line.
 CRASH_PATTERNS = [
@@ -96,20 +97,8 @@ def worker_server_pids(worker_dir):
     """Pids of mysqld processes started with a config file from this worker's conf/ directory.
     Paths are normalized, since some callers build them with doubled slashes."""
     conf_dir = os.path.normpath(os.path.join(worker_dir, 'conf'))
-    try:
-        output = subprocess.run(['pgrep', '-a', 'mysqld'], capture_output=True, text=True).stdout
-    except FileNotFoundError:
-        return []
-    pids = []
-    for line in output.splitlines():
-        fields = line.split()
-        for arg in fields[1:]:
-            if arg.startswith('--defaults-file='):
-                conf_file = os.path.normpath(arg[len('--defaults-file='):])
-                if os.path.dirname(conf_file) == conf_dir:
-                    pids.append(int(fields[0]))
-                break
-    return pids
+    return [pid for pid, conf_file in (processes.mysqld_processes() or [])
+            if os.path.dirname(conf_file) == conf_dir]
 
 
 def wait_for_servers_to_exit(worker_dir, timeout=SERVER_EXIT_TIMEOUT, poll_interval=1):

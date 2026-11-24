@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 
 import config
+from util import processes
 from util.db_connection import DbConnection, QueryExecutionError
 
 pstress_bin = config.PSTRESS_BIN
@@ -425,10 +426,19 @@ class Utility:
         """
         dbconnection_status = -1
         start_time = time.time()
+        conf_file = node.get_conf_file()
         while True:
             time.sleep(1)
             dbconnection_status = int(node.connection_check(False))
             if dbconnection_status == 0:
+                break
+            # Don't wait out the timeout for a server that has already exited
+            # (bad option, failed SST, killed for lack of memory, ...).
+            if conf_file and processes.mysqld_running(conf_file) is False:
+                print("Cluster node" + str(node.get_node_number()) + " mysqld exited during startup. "
+                      "Last lines of " + str(node.get_error_log()) + ":")
+                for line in processes.tail_lines(node.get_error_log()):
+                    print("    " + line)
                 break
             if time.time() > start_time + DEFAULT_SERVER_UP_TIMEOUT:
                 print("Timeout while starting/restarting cluster node" + str(node.get_node_number()))
