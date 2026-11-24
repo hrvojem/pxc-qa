@@ -9,7 +9,7 @@ import subprocess
 import shutil
 
 from config import WORKDIR, BASEDIR, PXC_LOWER_BASE, PXC_UPPER_BASE, USER
-from util import utility, db_connection
+from util import utility, db_connection, processes
 from util.utility import Version, Utility, PS_PORT_SUB_BASE, NODE_PORT_STRIDE, worker_port_band_base, find_available_ports, launch_server
 
 global_workdir = WORKDIR
@@ -215,6 +215,19 @@ class StartPerconaServer:
         """ Method to start the cluster nodes. This method
             will also check the startup status.
         """
+        launched_confs = []
+        try:
+            ps_nodes = self._start_server_nodes(my_extra, verify_startup, launched_confs)
+        except SystemExit:
+            # A check called exit() before the caller got the node list.
+            processes.stop_nodes_after_failed_start(launched_confs)
+            raise
+        return ps_nodes
+
+    def _start_server_nodes(self, my_extra, verify_startup, launched_confs):
+        """ Start each server in turn, appending its config file to
+            `launched_confs` as it is launched.
+        """
         if my_extra is None:
             my_extra = ''
         ps_nodes = []
@@ -229,6 +242,7 @@ class StartPerconaServer:
                        ' ' + my_extra + ' --log-error=' + err_log + ' >> ' + err_log + ' 2>&1')
             if self.__debug == 'YES':
                 print(startup)
+            launched_confs.append(conf)
             launch_result = launch_server(startup)
             if launch_result != 0:
                 print("Server " + str(i) + " startup failed on launch with exit code " + str(launch_result))

@@ -12,7 +12,7 @@ import time
 
 from distutils.spawn import find_executable
 
-from util import sanity, utility, sysbench_run
+from util import sanity, utility, sysbench_run, processes
 from util import db_connection
 from config import *
 from util.db_connection import DbConnection
@@ -388,6 +388,21 @@ class StartCluster:
         """ Method to start the cluster nodes. This method
             will also check the startup status.
         """
+        launched_confs = []
+        try:
+            pxc_nodes = self._start_cluster_nodes(my_extra, terminate_on_startup_failure, launched_confs)
+        except SystemExit:
+            # A check called exit() before the caller got the node list.
+            processes.stop_nodes_after_failed_start(launched_confs)
+            raise
+        if not pxc_nodes:
+            processes.stop_nodes_after_failed_start(launched_confs)
+        return pxc_nodes
+
+    def _start_cluster_nodes(self, my_extra, terminate_on_startup_failure, launched_confs):
+        """ Start each node in turn, appending its config file to
+            `launched_confs` as it is launched. Returns [] on failure.
+        """
         result = 1
         if my_extra is None:
             my_extra = ''
@@ -414,6 +429,7 @@ class StartCluster:
             os.system(save_startup)
             if self.__debug == 'YES':
                 print(startup)
+            launched_confs.append(conf)
             launch_result = launch_server(startup)
             if launch_result != 0:
                 print("Node" + str(i) + " startup failed on launch with exit code " + str(launch_result))
