@@ -33,7 +33,9 @@ jobs:
         # Catches imports that break on a clean host, such as distutils,
         # which Python 3.12 removed and only setuptools still provides.
         run: |
-          python -m pip install --quiet mysql-connector-python
+          # 9.2+ needs OpenSSL 3.2, newer than Ubuntu 22.04/24.04 ship; the test
+          # hosts use 9.1.0 for the same reason.
+          python -m pip install --quiet mysql-connector-python==9.1.0
           python -m pip uninstall --yes --quiet setuptools || true
           python - <<'EOF'
           import importlib, pathlib, sys
