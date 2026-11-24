@@ -211,6 +211,24 @@ Rules:
 - Skipped tests are reported on stdout and in `test_run_results.out`.
 - If `disabled.list` does not exist, no tests are skipped.
 
+Unit Tests
+------------------------------------------------------------------------------
+
+The framework's own helpers have unit tests in `test/` that need no server.
+Run them from the repository root (`config.py` reads `./config.ini`):
+
+```bash
+for t in test/test_*.py; do [ "$t" = test/test_startup.py ] || python3 "$t"; done
+```
+
+Run each file directly rather than with `python3 -m unittest test....`, which
+can pick up Python's own `test` package. `test/test_startup.py` is excluded
+because it drives a real cluster.
+
+GitHub Actions runs these tests, plus a compile check of every Python file
+with warnings treated as errors, on Python 3.9 and 3.12 for every push and
+pull request (`.github/workflows/unit-tests.yml`).
+
 Notes:
 ------------------------------------------------------------------------------
 

@@ -130,7 +130,7 @@ def sysbench_pid(node: DbConnection):
 
 
 def get_mysql_version(basedir: str):
-    query = basedir + "/bin/mysqld --version 2>&1 | grep -oe '[0-9]\.[0-9][\.0-9]*' | head -n1"
+    query = basedir + r"/bin/mysqld --version 2>&1 | grep -oe '[0-9]\.[0-9][\.0-9]*' | head -n1"
     return os.popen(query).read().rstrip()
 
 
@@ -182,7 +182,7 @@ class Utility:
         # point to a valid mysqld binary, instead of raising, so callers
         # that don't actually need this basedir aren't affected.
         version_info = os.popen(basedir + "/bin/mysqld --version 2>&1 "
-                                          "| grep -oe '[0-9]\.[0-9][\.0-9]*' | head -n1").read().strip()
+                                          r"| grep -oe '[0-9]\.[0-9][\.0-9]*' | head -n1").read().strip()
         parts = version_info.split('.')
         if len(parts) < 3 or not all(part.isdigit() for part in parts[:3]):
             return ""
