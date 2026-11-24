@@ -29,6 +29,31 @@ jobs:
       - name: Compile every Python file (warnings are errors)
         run: python -W error -m compileall -q -f .
 
+      - name: Import every library module (without setuptools)
+        # Catches imports that break on a clean host, such as distutils,
+        # which Python 3.12 removed and only setuptools still provides.
+        run: |
+          python -m pip install --quiet mysql-connector-python
+          python -m pip uninstall --yes --quiet setuptools || true
+          python - <<'EOF'
+          import importlib, pathlib, sys
+          sys.path.insert(0, '.')  # repository root
+          # Standalone scripts that do work as soon as they are imported.
+          skip = {'create_cnf', 'data_generator', 'pxc_util'}
+          modules = ['config', 'qa_framework'] + sorted(
+              'util.' + path.stem for path in pathlib.Path('util').glob('*.py')
+              if path.stem not in skip and path.stem != '__init__')
+          failed = []
+          for name in modules:
+              try:
+                  importlib.import_module(name)
+              except Exception as error:
+                  failed.append(name)
+                  print('FAILED ' + name + ': ' + repr(error))
+          print('imported %d/%d modules' % (len(modules) - len(failed), len(modules)))
+          sys.exit(1 if failed else 0)
+          EOF
+
       - name: Run unit tests
         run: |
           status=0

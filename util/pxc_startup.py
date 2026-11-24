@@ -10,7 +10,6 @@ import subprocess
 import shutil
 import time
 
-from distutils.spawn import find_executable
 
 from util import sanity, utility, sysbench_run
 from util import db_connection
@@ -638,7 +637,7 @@ class StartCluster:
             cleanup backup directory
         """
         # Check xtrabackup installation
-        if find_executable('xtrabackup') is None:
+        if shutil.which('xtrabackup') is None:
             print('\tERROR! Percona Xtrabackup is not installed.')
             exit(1)
 
