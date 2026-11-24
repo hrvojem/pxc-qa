@@ -12,6 +12,28 @@ parent_dir = os.path.normpath(os.path.join(cwd, '../'))
 sys.path.insert(0, parent_dir)
 from util import utility
 
+# Where sysbench's Lua scripts live: source builds install them under
+# /usr/local/share/sysbench, distribution packages under /usr/share/sysbench.
+SYSBENCH_LUA_DIRS = ['/usr/local/share/sysbench', '/usr/share/sysbench']
+
+
+def resolve_sysbench_dir(configured, candidates=SYSBENCH_LUA_DIRS, isfile=os.path.isfile):
+    """ Return `configured` if it holds sysbench's Lua scripts (oltp_common.lua),
+        otherwise the first standard location that does, otherwise `configured`.
+    """
+    def has_scripts(directory):
+        return isfile(os.path.join(directory, 'oltp_common.lua'))
+    if has_scripts(configured):
+        return configured
+    for candidate in candidates:
+        if os.path.normpath(candidate) != os.path.normpath(configured) and has_scripts(candidate):
+            print("sysbench_dir " + configured + " has no sysbench Lua scripts; using " + candidate)
+            return candidate
+    return configured
+
+
+SYSBENCH_DIR = resolve_sysbench_dir(SYSBENCH_DIR)
+
 SYSBENCH_DB_CONNECT = " --mysql-user=" + SYSBENCH_USER + \
                       " --mysql-password=" + SYSBENCH_PASS + " --db-driver=mysql "
 EXPORT_LUA_PATH = 'export SBTEST_SCRIPTDIR="' + SYSBENCH_DIR + \
