@@ -41,7 +41,7 @@ jobs:
           import importlib, pathlib, sys
           sys.path.insert(0, '.')  # repository root
           # Standalone scripts that do work as soon as they are imported.
-          skip = {'create_cnf', 'data_generator', 'pxc_util'}
+          skip = {'data_generator', 'pxc_util'}
           modules = ['config', 'qa_framework'] + sorted(
               'util.' + path.stem for path in pathlib.Path('util').glob('*.py')
               if path.stem not in skip and path.stem != '__init__')
