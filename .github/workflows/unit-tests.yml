@@ -1,0 +1,42 @@
+name: Unit tests
+
+# Checks that need no PXC/PS server: every Python file compiles without
+# warnings, and the unit tests in test/ pass. Cluster suites still run in
+# Jenkins.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the oldest version the code runs on (it uses list[...] hints).
+        python-version: ['3.9', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Compile every Python file (warnings are errors)
+        run: python -W error -m compileall -q -f .
+
+      - name: Run unit tests
+        run: |
+          status=0
+          for t in test/test_*.py; do
+            # test_startup.py drives a real cluster; it is not a unit test.
+            [ "$t" = test/test_startup.py ] && continue
+            echo "::group::$t"
+            python "$t" -v || status=1
+            echo "::endgroup::"
+          done
+          exit $status
