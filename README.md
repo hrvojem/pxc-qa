@@ -17,6 +17,7 @@ Before running the framework, make sure the test host has:
 - Python 3.
 - `mysql.connector` available to Python.
 - A PXC or PS binary tarball extracted on disk.
+- `socat` in `PATH` for PXC clusters with more than one node (used by xtrabackup-v2 SST).
 - `sysbench` installed if running sysbench suites.
 - Percona Toolkit configured if running checksum-based tests.
 - `pstress` and its grammar file configured if running random QA pstress tests.

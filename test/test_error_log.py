@@ -117,7 +117,7 @@ class TestWaitForServers(unittest.TestCase):
              '106 /pxc/bin/mysqld --no-defaults --datadir=/qa/conf/\n')
 
     def test_only_this_workers_servers_are_matched(self):
-        with mock.patch.object(error_log.subprocess, 'run',
+        with mock.patch.object(error_log.processes.subprocess, 'run',
                                return_value=mock.Mock(stdout=self.PGREP)):
             self.assertEqual(error_log.worker_server_pids('/qa'), [101, 103])
             self.assertEqual(error_log.worker_server_pids('/qa/'), [101, 103])
