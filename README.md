@@ -25,6 +25,29 @@ Before running the framework, make sure the test host has:
 The configured MySQL user is usually `root`, and the test servers are started
 with local sockets inside the framework work directory.
 
+Memory requirements
+------------------------------------------------------------------------------
+
+Some suites give every node a large InnoDB buffer pool. With the default of
+three PXC nodes, the buffer pools alone need:
+
+| Suite / tests | Buffer pool per node | 3 PXC nodes |
+|---|---|---|
+| `sysbench_run` (`sysbench_oltp_test`, `sysbench_read_only_test`, `sysbench_customized_dataload_test`) | 8G | 24G |
+| `loadtest` (`sysbench_load_test`, `sysbench_random_load_test`, `sysbench_wsrep_provider_option_random_test`) | 2G | 6G |
+| `galera_sr` (`galera_basic_sr_qa`, `thread_pool_qa`) | 2G | 6G |
+| All other tests | InnoDB default (128M) | small |
+
+Add memory for the data itself: if `workdir` is in `/dev/shm` (the default),
+the data directories are held in RAM as well, and the large sysbench loads
+(for example `sysbench_load_test` with 128 tables) need several more GB per
+node. On a smaller host, point `workdir` at a disk directory.
+
+Without enough memory the kernel's OOM killer stops a mysqld during the test,
+which looks like a node that never starts or never syncs. Before starting the
+nodes, each test prints a warning when the buffer pools alone exceed the
+host's available memory.
+
 Configuration
 ------------------------------------------------------------------------------
 

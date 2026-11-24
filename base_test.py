@@ -13,7 +13,7 @@ if sys.version_info < (3, 9):
     sys.exit(1)
 
 from config import WORKDIR, NODE, PT_BASEDIR, BASEDIR, SERVER, PXC_LOWER_BASE, PXC_UPPER_BASE, SKIP_TEST_EXIT_CODE
-from util import pxc_startup, ps_startup
+from util import pxc_startup, ps_startup, resources
 from util.db_connection import SHUTDOWN_TIMEOUT
 from util.utility import *
 
@@ -145,12 +145,18 @@ class BaseTest:
             sys.stderr.flush()
             os._exit(1)
 
+    def _warn_if_short_of_memory(self, mysqld_options):
+        warning = resources.memory_warning(mysqld_options, self.__number_of_nodes, workdir)
+        if warning:
+            print(warning)
+
     def start_pxc(self, my_extra: str = None, custom_conf_settings: dict = None,
                   terminate_on_startup_failure: bool = True):
         if my_extra is not None:
             my_extra_options = my_extra
         else:
             my_extra_options = self.__my_extra
+        self._warn_if_short_of_memory(my_extra_options)
 
         # Start PXC cluster
         server_startup = pxc_startup.StartCluster(self.__number_of_nodes, debug, self.__version, worker_id,
@@ -193,6 +199,7 @@ class BaseTest:
             my_extra_options = my_extra
         else:
             my_extra_options = self.__my_extra
+        self._warn_if_short_of_memory(my_extra_options)
         server_startup = ps_startup.StartPerconaServer(self.__number_of_nodes, debug, self.__version, worker_id)
         server_startup.test_sanity_check()
         if encryption or self.encrypt:
