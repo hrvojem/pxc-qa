@@ -17,15 +17,22 @@ import time
 from util import processes
 
 # (description, pattern) pairs. Each pattern is matched against one log line.
+# Message wording was checked against the PXC 8.4.8 binaries and libstdc++.
 CRASH_PATTERNS = [
     ('mysqld crashed on a signal', re.compile(r'mysqld got signal \d+')),
     ('assertion failure', re.compile(r'Assertion failure:|Assertion `.*\' failed')),
-    # Sanitizer reports start with "ERROR: <Name>Sanitizer: " or "WARNING: <Name>Sanitizer: ";
-    # informational lines such as "INFO: AddressSanitizer ignores mlock/..." do not.
-    ('sanitizer report', re.compile(r'(ERROR|WARNING): (Address|Thread|Memory|Leak)Sanitizer: |runtime error: ')),
-    ('uncaught C++ exception', re.compile(r'terminate called after throwing')),
-    ('InnoDB corruption', re.compile(r'\[ERROR\].*\[InnoDB\].*[Cc]orrupt|Database page corruption')),
-    ('Galera inconsistency', re.compile(r'Inconsistency detected|Node consistency compromised')),
+    # Sanitizer reports start with "ERROR: <Name>Sanitizer: " or "WARNING: <Name>Sanitizer: "
+    # for any of these sanitizers; informational lines such as
+    # "INFO: AddressSanitizer ignores mlock/..." do not.
+    ('sanitizer report', re.compile(r'(ERROR|WARNING): (Address|HWAddress|Thread|Memory|Leak|UndefinedBehavior)Sanitizer: '
+                                    r'|runtime error: ')),
+    ('uncaught C++ exception', re.compile(r'terminate called (after throwing|without an active exception'
+                                          r'|recursively)')),
+    # 8.0+ logs say "[ERROR] ... [InnoDB] ...", 5.7 logs "[ERROR] InnoDB: ...".
+    ('InnoDB corruption', re.compile(r'\[ERROR\].*(\[InnoDB\]|InnoDB:).*[Cc]orrupt|Database page corruption')),
+    # Galera spells it "compromized" (libgalera_smm.so and mysqld's WSREP code).
+    ('Galera inconsistency', re.compile(r'Inconsistency detected|Node consistency compromi[sz]ed'
+                                        r'|is inconsistent with group')),
 ]
 
 # Lines matching any of these are ignored even if they match CRASH_PATTERNS.
@@ -48,20 +55,24 @@ def scan_error_log(path, allowed_patterns=None):
     if allowed_patterns is None:
         allowed_patterns = ALLOWED_PATTERNS
     findings = []
-    with open(path, 'r', errors='replace') as log_file:
+    # Split on "\n" only, so line numbers match grep -n even if a line has a stray "\r".
+    with open(path, 'r', errors='replace', newline='\n') as log_file:
         for line_number, line in enumerate(log_file, 1):
             for description, pattern in CRASH_PATTERNS:
                 if pattern.search(line):
                     if not any(allowed.search(line) for allowed in allowed_patterns):
-                        findings.append((line_number, description, line.rstrip('\n')))
+                        findings.append((line_number, description, line.rstrip('\n').rstrip('\r')))
                     break
     return findings
 
 
 def error_log_files(log_dir):
+    """Regular files in `log_dir` matching ERROR_LOG_GLOBS, sorted. The directory
+    name is escaped, so glob characters in it ("qa[1]") are taken literally."""
     files = set()
     for pattern in ERROR_LOG_GLOBS:
-        files.update(glob.glob(os.path.join(log_dir, pattern)))
+        files.update(path for path in glob.glob(os.path.join(glob.escape(log_dir), pattern))
+                     if os.path.isfile(path))
     return sorted(files)
 
 
@@ -96,7 +107,7 @@ def clear_error_logs(log_dir):
 def worker_server_pids(worker_dir):
     """Pids of mysqld processes started with a config file from this worker's conf/ directory.
     Paths are normalized, since some callers build them with doubled slashes."""
-    conf_dir = os.path.normpath(os.path.join(worker_dir, 'conf'))
+    conf_dir = processes.normalize_path(os.path.join(worker_dir, 'conf'))
     return [pid for pid, conf_file in (processes.mysqld_processes() or [])
             if os.path.dirname(conf_file) == conf_dir]
 
@@ -114,11 +125,14 @@ def wait_for_servers_to_exit(worker_dir, timeout=SERVER_EXIT_TIMEOUT, poll_inter
     while pids and time.monotonic() < deadline:
         time.sleep(poll_interval)
         pids = worker_server_pids(worker_dir)
+    signalled = []
     for pid in pids:
         try:
             os.kill(pid, signal.SIGKILL)
+            signalled.append(pid)
         except ProcessLookupError:
-            pass
+            pass  # exited by itself just now; not killed by us
+    pids = signalled
     if not pids:
         return [], []
     surviving = [pid for pid in worker_server_pids(worker_dir) if pid in pids]

@@ -41,6 +41,7 @@ BACKUP_TIMEOUT = 1800
 
 
 def pxc_allocate_ports(worker_id, node_number, set_admin_address: bool = False):
+    utility.check_node_number(node_number, utility.MAX_PXC_NODES_PER_WORKER, "PXC")
     slot_base = (worker_port_band_base(worker_id) + (node_number - 1) * NODE_PORT_STRIDE)
     slot_end = slot_base + NODE_PORT_STRIDE - 1
 

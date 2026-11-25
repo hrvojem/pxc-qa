@@ -47,6 +47,18 @@ PORT_BAND_BASE = 10000
 WORKER_PORT_BAND_SIZE = 1000
 NODE_PORT_STRIDE = 100
 PS_PORT_SUB_BASE = 600
+# Limits implied by the layout: PXC slots must end before the PS sub-band,
+# PS slots before the next worker's band, and the last band at port 65535.
+MAX_PXC_NODES_PER_WORKER = PS_PORT_SUB_BASE // NODE_PORT_STRIDE
+MAX_PS_NODES_PER_WORKER = (WORKER_PORT_BAND_SIZE - PS_PORT_SUB_BASE) // NODE_PORT_STRIDE
+MAX_WORKER_ID = (65535 - PORT_BAND_BASE - WORKER_PORT_BAND_SIZE + 1) // WORKER_PORT_BAND_SIZE
+
+
+def check_node_number(node_number, max_nodes, kind):
+    """Raise ValueError if `node_number` has no slot in a worker's port band."""
+    if isinstance(node_number, bool) or not isinstance(node_number, int) or not 1 <= node_number <= max_nodes:
+        raise ValueError(kind + " node number " + str(node_number) + " is outside the port layout (1-"
+                         + str(max_nodes) + " per worker)")
 
 
 def is_port_busy(port):
@@ -100,7 +112,11 @@ def find_available_ports(start, end, count):
 
 
 def worker_port_band_base(worker_id):
-    return PORT_BAND_BASE + max(worker_id, 0) * WORKER_PORT_BAND_SIZE
+    worker_id = max(worker_id, 0)
+    if worker_id > MAX_WORKER_ID:
+        raise ValueError("worker " + str(worker_id) + " has no port band below 65536 (workers 0-"
+                         + str(MAX_WORKER_ID) + ")")
+    return PORT_BAND_BASE + worker_id * WORKER_PORT_BAND_SIZE
 
 
 class RplType(Enum):
@@ -197,10 +213,13 @@ class Utility:
             The checksum is None when the server could not compute one.
             Views are skipped: they hold no data and always checksum to NULL.
         """
+        def quote(identifier):
+            return '`' + identifier.replace('`', '``') + '`'
+
         checksums = {}
-        for row in node.execute_get_values("show full tables in `" + db + "` where Table_type = 'BASE TABLE'"):
+        for row in node.execute_get_values("show full tables in " + quote(db) + " where Table_type = 'BASE TABLE'"):
             table = row[0]
-            rows = node.execute_get_values("checksum table `" + db + "`.`" + table + "`")
+            rows = node.execute_get_values("checksum table " + quote(db) + "." + quote(table))
             checksums[table] = rows[0][1] if rows else None
         return checksums
 
