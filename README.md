@@ -66,6 +66,7 @@ pstress_bin = /dev/shm/qa/pstress/src/pstress-pxc
 pstress_grammar_file = /dev/shm/qa/pstress/src/grammar.sql
 
 [sysbench]
+sysbench_dir = /usr/local/share/sysbench
 sysbench_user = sysbench
 sysbench_pass = sysbench
 sysbench_db = sbtest
@@ -239,7 +240,10 @@ Unit Tests
 ------------------------------------------------------------------------------
 
 The framework's own helpers have unit tests in `test/` that need no server.
-Run them from the repository root (`config.py` reads `./config.ini`):
+Many are property-based tests written with [Hypothesis](https://hypothesis.readthedocs.io/),
+which generate thousands of inputs per property and shrink any failure to a
+minimal example. Install it first (`python3 -m pip install hypothesis`), then
+run the tests from the repository root (`config.py` reads `./config.ini`):
 
 ```bash
 for t in test/test_*.py; do [ "$t" = test/test_startup.py ] || python3 "$t"; done
@@ -248,6 +252,11 @@ for t in test/test_*.py; do [ "$t" = test/test_startup.py ] || python3 "$t"; don
 Run each file directly rather than with `python3 -m unittest test....`, which
 can pick up Python's own `test` package. `test/test_startup.py` is excluded
 because it drives a real cluster.
+
+Property tests run 1,000 examples each by default. Set
+`HYPOTHESIS_PROFILE=thorough` for 10,000 (about six minutes in total). A
+failure prints the shrunk example and is replayed first on the next run from
+the local `.hypothesis/` directory.
 
 GitHub Actions runs these tests, plus a compile check of every Python file
 with warnings treated as errors, on Python 3.9 and 3.12 for every push and

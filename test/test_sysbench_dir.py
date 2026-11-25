@@ -66,5 +66,28 @@ class TestResolveSysbenchDir(unittest.TestCase):
         self.assertEqual(out, '')
 
 
+# ---------------------------------------------------------------------------
+# Property-based tests (Hypothesis)
+# ---------------------------------------------------------------------------
+import pbt_support  # noqa: E402,F401  (Hypothesis profile)
+from hypothesis import given, strategies as st  # noqa: E402
+
+DIRS = ['/usr/local/share/sysbench', '/usr/share/sysbench', '/opt/sysbench', '/wrong/path']
+
+
+class TestResolveSysbenchDirProperties(unittest.TestCase):
+
+    @given(st.sampled_from(DIRS), st.sets(st.sampled_from(DIRS)), st.sampled_from(['', '/']))
+    def test_configured_dir_or_first_standard_dir_with_scripts(self, configured, with_scripts, trailing):
+        with mock.patch('sys.stdout', new_callable=io.StringIO):
+            result = resolve_sysbench_dir(configured + trailing, CANDIDATES, files(*with_scripts))
+        if configured in with_scripts:
+            expected = configured + trailing
+        else:
+            usable = [c for c in CANDIDATES if c in with_scripts]
+            expected = usable[0] if usable else configured + trailing
+        self.assertEqual(result, expected)
+
+
 if __name__ == '__main__':
     unittest.main()
