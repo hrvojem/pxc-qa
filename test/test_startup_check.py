@@ -169,5 +169,143 @@ class TestStartupCheck(unittest.TestCase):
         self.assertIn('Timeout', out)
 
 
+# ---------------------------------------------------------------------------
+# Property-based tests (Hypothesis)
+# ---------------------------------------------------------------------------
+import pbt_support  # noqa: E402,F401  (Hypothesis profile)
+from hypothesis import given, strategies as st  # noqa: E402
+
+path_parts = st.text(st.characters(whitelist_categories=('Ll', 'Lu', 'Nd'), whitelist_characters='_-.'),
+                     min_size=1, max_size=8).filter(lambda part: part not in ('.', '..'))
+abs_paths = st.lists(path_parts, min_size=1, max_size=4).map(lambda parts: '/' + '/'.join(parts))
+# Command-line arguments as pgrep prints them: arguments are separated by spaces, so a
+# path containing whitespace can't be told apart from two arguments (and the
+# framework's own startup commands don't quote paths either).
+other_args = st.one_of(abs_paths, path_parts.map(lambda p: '--' + p), path_parts.map(lambda p: '--' + p + '=x'))
+
+
+def spellings(path):
+    """The same absolute path written with "//", "/./" or a trailing "/"."""
+    parts = path.strip('/').split('/')
+    return st.tuples(st.lists(st.sampled_from(['/', '//', '/./']), min_size=len(parts), max_size=len(parts)),
+                     st.sampled_from(['', '/'])).map(
+        lambda seps: ''.join(sep + part for sep, part in zip(seps[0], parts)) + seps[1])
+
+
+def listing(processes_args):
+    return ''.join(str(pid) + ' /pxc/bin/mysqld ' + ' '.join(args) + '\n' for pid, args in processes_args)
+
+
+class TestProcessListingProperties(unittest.TestCase):
+
+    @given(st.lists(st.tuples(st.integers(1, 10 ** 7),
+                              st.lists(st.one_of(other_args, abs_paths.map(lambda p: '--defaults-file=' + p)),
+                                       max_size=5)), max_size=6))
+    def test_each_process_is_listed_with_its_first_defaults_file(self, processes_args):
+        with mock.patch.object(processes.subprocess, 'run', return_value=mock.Mock(stdout=listing(processes_args))):
+            result = processes.mysqld_processes()
+        expected = []
+        for pid, args in processes_args:
+            files = [arg[len('--defaults-file='):] for arg in args if arg.startswith('--defaults-file=')]
+            if files:
+                expected.append((pid, os.path.normpath(files[0])))
+        self.assertEqual(result, expected)
+
+    @given(abs_paths, st.data())
+    def test_running_check_agrees_for_every_spelling_of_the_config_path(self, conf, data):
+        started_as = data.draw(spellings(conf))
+        asked_as = data.draw(spellings(conf))
+        output = listing([(4242, ['--defaults-file=' + started_as, '--datadir=/d'])])
+        with mock.patch.object(processes.subprocess, 'run', return_value=mock.Mock(stdout=output)):
+            self.assertTrue(processes.mysqld_running(asked_as))
+
+    @given(abs_paths, abs_paths)
+    def test_running_check_never_matches_a_different_config(self, conf, other):
+        if processes.normalize_path(conf) != processes.normalize_path(other):
+            output = listing([(4242, ['--defaults-file=' + conf])])
+            with mock.patch.object(processes.subprocess, 'run', return_value=mock.Mock(stdout=output)):
+                self.assertFalse(processes.mysqld_running(other))
+
+    @given(st.dictionaries(st.integers(1, 10 ** 6), abs_paths, max_size=6), st.data())
+    def test_kill_signals_exactly_the_processes_with_the_given_configs(self, table, data):
+        chosen = data.draw(st.sets(st.sampled_from(sorted(set(table.values()))))) if table else set()
+        wanted = [data.draw(spellings(conf)) for conf in chosen]
+        alive = dict(table)
+
+        def kill(pid, sig):
+            alive.pop(pid, None)
+
+        with mock.patch.object(processes, 'mysqld_processes',
+                               side_effect=lambda: [(pid, processes.normalize_path(conf))
+                                                    for pid, conf in alive.items()]), \
+                mock.patch.object(processes.os, 'kill', side_effect=kill), \
+                mock.patch.object(processes.time, 'sleep'):
+            killed = processes.kill_mysqld_for_confs(wanted)
+        self.assertEqual(sorted(killed), sorted(pid for pid, conf in table.items() if conf in chosen))
+
+
+class TestOnlyMysqldProperties(unittest.TestCase):
+
+    @given(st.sampled_from(['mysqld_safe', 'mysqldump', 'mysqladmin', 'mysqld-debug.sh']), abs_paths)
+    def test_other_programs_with_a_defaults_file_are_not_mysqld(self, program, conf):
+        output = '777 /usr/bin/' + program + ' --defaults-file=' + conf + '\n'
+        with mock.patch.object(processes.subprocess, 'run', return_value=mock.Mock(stdout=output)):
+            self.assertEqual(processes.mysqld_processes(), [])
+
+    @given(abs_paths, abs_paths)
+    def test_mysqld_by_any_path_is_mysqld(self, binary_dir, conf):
+        output = '777 ' + binary_dir + '/mysqld --defaults-file=' + conf + '\n'
+        with mock.patch.object(processes.subprocess, 'run', return_value=mock.Mock(stdout=output)):
+            self.assertEqual(processes.mysqld_processes(), [(777, processes.normalize_path(conf))])
+
+
+class TestKillReportsOnlySignalledProperties(unittest.TestCase):
+
+    @given(st.dictionaries(st.integers(1, 10 ** 6), abs_paths, min_size=1, max_size=6), st.data())
+    def test_a_process_gone_before_the_signal_is_not_reported_as_killed(self, table, data):
+        gone = data.draw(st.sets(st.sampled_from(sorted(table))))
+        alive = dict(table)
+
+        def kill(pid, sig):
+            if pid in gone:
+                raise ProcessLookupError(pid)
+            alive.pop(pid, None)
+
+        with mock.patch.object(processes, 'mysqld_processes',
+                               side_effect=lambda: [(pid, conf) for pid, conf in alive.items()]), \
+                mock.patch.object(processes.os, 'kill', side_effect=kill), \
+                mock.patch.object(processes.time, 'sleep'), \
+                mock.patch.object(processes.time, 'monotonic', side_effect=iter(range(0, 10 ** 6, 10)).__next__):
+            killed = processes.kill_mysqld_for_confs(list(table.values()))
+        self.assertEqual(sorted(killed), sorted(pid for pid in table if pid not in gone))
+
+
+class TestNormalizePathProperties(unittest.TestCase):
+
+    @given(abs_paths, st.data())
+    def test_every_spelling_normalizes_to_one_canonical_path(self, path, data):
+        spelling = data.draw(spellings(path))
+        normalized = processes.normalize_path(spelling)
+        self.assertEqual(normalized, processes.normalize_path(path))
+        self.assertTrue(normalized.startswith('/') and '//' not in normalized)
+        self.assertEqual(processes.normalize_path(normalized), normalized)
+
+
+class TestTailLinesProperties(unittest.TestCase):
+
+    lines = st.lists(st.text(st.characters(blacklist_characters='\r\n', blacklist_categories=('Cs',)),
+                             max_size=20), max_size=40)
+
+    @given(lines, st.integers(-5, 50))
+    def test_returns_the_last_count_lines(self, lines, count):
+        with tempfile.NamedTemporaryFile('w', suffix='.err', delete=False, newline='\n') as handle:
+            handle.write(''.join(line + '\n' for line in lines))
+        try:
+            result = processes.tail_lines(handle.name, count)
+        finally:
+            os.remove(handle.name)
+        self.assertEqual(result, lines[-count:] if count > 0 else [])
+
+
 if __name__ == '__main__':
     unittest.main()

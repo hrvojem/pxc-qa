@@ -184,5 +184,223 @@ class TestHandleTestResult(unittest.TestCase):
         self.assertIn('[Pass]', out)
 
 
+# ---------------------------------------------------------------------------
+# Property-based tests (Hypothesis)
+# ---------------------------------------------------------------------------
+import os.path  # noqa: E402
+import re  # noqa: E402
+
+import pbt_support  # noqa: E402,F401  (Hypothesis profile)
+from hypothesis import assume, given, strategies as st  # noqa: E402
+
+DESCRIPTIONS = [description for description, _ in error_log.CRASH_PATTERNS]
+
+
+def matches_any_marker(text):
+    return any(pattern.search(text) for _, pattern in error_log.CRASH_PATTERNS)
+
+
+# Log noise: printable text without line breaks that contains no crash marker.
+noise = st.text(st.characters(blacklist_characters='\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029',
+                              blacklist_categories=('Cs',)), max_size=40).filter(
+    lambda text: not matches_any_marker(text))
+words = st.text(st.characters(whitelist_categories=('Ll', 'Lu', 'Nd')), min_size=1, max_size=10)
+digits = st.integers(0, 10 ** 6).map(str)
+
+# One generator per crash marker kind, each paired with the description it must be reported as.
+crash_markers = st.one_of(
+    digits.map(lambda n: ('mysqld crashed on a signal', 'mysqld got signal ' + n + ' ;')),
+    st.tuples(words, digits).map(lambda a: ('assertion failure', 'Assertion failure: ' + a[0] + '.cc:' + a[1])),
+    words.map(lambda expr: ('assertion failure', 'Assertion `' + expr + "' failed.")),
+    st.tuples(st.sampled_from(['ERROR', 'WARNING']), st.sampled_from(['Address', 'Thread', 'Memory', 'Leak']),
+              words).map(lambda a: ('sanitizer report', a[0] + ': ' + a[1] + 'Sanitizer: ' + a[2])),
+    st.tuples(words, digits).map(lambda a: ('sanitizer report', a[0] + '.cc:' + a[1] + ': runtime error: x')),
+    words.map(lambda kind: ('uncaught C++ exception', "terminate called after throwing an instance of '"
+                            + kind + "'")),
+    digits.map(lambda n: ('InnoDB corruption', '[ERROR] [MY-' + n + '] [InnoDB] page is corrupted')),
+    st.just(('InnoDB corruption', 'Database page corruption on disk or a failed file read')),
+    # Wording below is taken from the PXC 8.4.8 binaries (libgalera_smm.so, mysqld)
+    # and libstdc++, not from memory.
+    st.sampled_from([('Galera inconsistency', 'Inconsistency detected: Inconsistent by consensus'),
+                     ('Galera inconsistency', 'Node consistency compromized, leaving cluster...'),
+                     ('Galera inconsistency', 'Node consistency compromized, need to abort.'),
+                     ('Galera inconsistency', 'a1b2c3 is inconsistent with group. Leaving cluster.'),
+                     ('uncaught C++ exception', 'terminate called without an active exception'),
+                     ('uncaught C++ exception', 'terminate called recursively'),
+                     ('sanitizer report', '==7==ERROR: UndefinedBehaviorSanitizer: SEGV on unknown address'),
+                     ('sanitizer report', '==7==ERROR: HWAddressSanitizer: tag-mismatch'),
+                     # MySQL/PXC 5.7 log format: "[ERROR] InnoDB: ..." rather than "[InnoDB]".
+                     ('InnoDB corruption', '[ERROR] InnoDB: Corruption of an index tree')]))
+
+# Lines that look like markers but are informational or below [ERROR] level.
+near_misses = st.one_of(
+    words.map(lambda w: 'INFO: AddressSanitizer ignores mlock/mlockall/munlock/munlockall ' + w),
+    digits.map(lambda n: 'WARNING: AddressSanitizer failed to allocate 0x' + n + ' bytes'),
+    st.sampled_from(['[Note]', '[Warning]', '[System]']).map(
+        lambda level: level + ' [MY-012345] [InnoDB] checking for corruption'),
+    st.just('InnoDB: corruption in the InnoDB tablespace. Please refer to'),
+    words.map(lambda w: 'mysqld_safe got ' + w),
+    st.just('[ERROR] [MY-000067] [Server] unknown variable'),
+    st.just('[ERROR] [MY-010119] [Server] Aborting'))
+
+
+def write_lines(directory, name, lines):
+    path = os.path.join(directory, name)
+    with open(path, 'w', newline='\n') as handle:
+        handle.write('\n'.join(lines) + '\n')
+    return path
+
+
+class TestScanProperties(unittest.TestCase):
+
+    @given(st.lists(noise, max_size=20), st.lists(st.tuples(crash_markers, noise, noise), max_size=5),
+           st.randoms())
+    def test_scan_reports_exactly_the_planted_markers(self, noise_lines, planted, rnd):
+        lines = [(None, line) for line in noise_lines]
+        lines += [(description, before + marker + after) for (description, marker), before, after in planted]
+        rnd.shuffle(lines)
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_lines(directory, 'node1.err', [text for _, text in lines])
+            findings = error_log.scan_error_log(path, [])
+        expected = [(number, description, text) for number, (description, text) in enumerate(lines, 1)
+                    if description is not None]
+        self.assertEqual(findings, expected)
+
+    @given(st.lists(st.tuples(noise, near_misses, noise), min_size=1, max_size=10))
+    def test_near_misses_are_never_reported(self, lines):
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_lines(directory, 'node1.err', [a + line + b for a, line, b in lines])
+            self.assertEqual(error_log.scan_error_log(path, []), [])
+
+    @given(st.lists(st.tuples(crash_markers, words), min_size=1, max_size=6, unique_by=lambda x: x[1]),
+           st.data())
+    def test_allowed_patterns_suppress_only_matching_lines(self, planted, data):
+        lines = [marker + ' id=' + tag + ';' for (_, marker), tag in planted]
+        allowed_tags = data.draw(st.sets(st.sampled_from([tag for _, tag in planted])))
+        allowed = [re.compile(re.escape(' id=' + tag + ';')) for tag in allowed_tags]
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_lines(directory, 'node1.err', lines)
+            reported = [text for _, _, text in error_log.scan_error_log(path, allowed)]
+        self.assertEqual(reported, [line for line, (_, tag) in zip(lines, planted) if tag not in allowed_tags])
+
+
+# File names in a worker's log directory: the ones mysqld writes, and others.
+mysqld_log_names = st.one_of(
+    st.tuples(st.sampled_from(['node', 'psnode']), digits).map(lambda a: a[0] + a[1] + '.err'),
+    st.tuples(st.sampled_from(['init', 'ps_init']), digits).map(lambda a: a[0] + a[1] + '.log'))
+other_names = st.one_of(
+    st.sampled_from(['sysbench.log', 'node1.err.bak', 'init1.txt', 'startup1.sh', 'node1.cnf', 'tests_log']),
+    words.map(lambda w: w + '.out'))
+
+
+def is_mysqld_log(name):
+    return name.endswith('.err') or (name.startswith(('init', 'ps_init')) and name.endswith('.log'))
+
+
+class TestLogFileSelectionProperties(unittest.TestCase):
+
+    @given(st.sets(mysqld_log_names, max_size=6), st.sets(other_names, max_size=6))
+    def test_clear_removes_exactly_the_mysqld_logs(self, logs, others):
+        # Distinct even on a case-insensitive filesystem (macOS), where "A.out" == "a.out".
+        assume(len({name.casefold() for name in logs | others}) == len(logs | others))
+        with tempfile.TemporaryDirectory() as directory:
+            for name in logs | others:
+                write_lines(directory, name, ['x'])
+            error_log.clear_error_logs(directory)
+            self.assertEqual(set(os.listdir(directory)), {name for name in others if not is_mysqld_log(name)})
+
+    @given(st.sets(mysqld_log_names, max_size=6), st.sets(other_names, max_size=6), crash_markers)
+    def test_scan_reads_exactly_the_mysqld_logs(self, logs, others, marker):
+        assume(len({name.casefold() for name in logs | others}) == len(logs | others))
+        with tempfile.TemporaryDirectory() as directory:
+            for name in logs | others:
+                write_lines(directory, name, [marker[1]])
+            scanned = {os.path.basename(path) for path in error_log.scan_error_logs(directory)}
+        self.assertEqual(scanned, {name for name in logs | others if is_mysqld_log(name)})
+
+
+# Directory names containing glob syntax, next to a sibling the glob would match instead.
+glob_dir_names = st.tuples(st.sampled_from(['[', '*', '?']), words).map(
+    lambda a: {'[': ('qa[1]', 'qa1'), '*': ('qa*', 'qaX'), '?': ('qa?', 'qaZ')}[a[0]])
+
+
+class TestLogDirectoryProperties(unittest.TestCase):
+
+    @given(glob_dir_names, st.sets(mysqld_log_names, min_size=1, max_size=4))
+    def test_glob_characters_in_the_log_dir_are_literal(self, names, logs):
+        own, sibling = names
+        with tempfile.TemporaryDirectory() as root:
+            for directory in (own, sibling):
+                os.mkdir(os.path.join(root, directory))
+                for name in logs:
+                    write_lines(os.path.join(root, directory), name, ['mysqld got signal 11 ;'])
+            own_dir = os.path.join(root, own)
+            self.assertEqual(error_log.error_log_files(own_dir), sorted(os.path.join(own_dir, n) for n in logs))
+            error_log.clear_error_logs(own_dir)
+            self.assertEqual(set(os.listdir(os.path.join(root, sibling))), logs)
+
+    @given(st.sets(mysqld_log_names, max_size=4), mysqld_log_names)
+    def test_a_directory_named_like_a_log_is_not_a_log(self, logs, directory_name):
+        assume(directory_name not in logs)
+        with tempfile.TemporaryDirectory() as root:
+            for name in logs:
+                write_lines(root, name, ['x'])
+            os.mkdir(os.path.join(root, directory_name))
+            self.assertNotIn(os.path.join(root, directory_name), error_log.error_log_files(root))
+            error_log.clear_error_logs(root)
+            self.assertEqual(os.listdir(root), [directory_name])
+
+    @given(st.lists(st.tuples(noise, st.booleans()), min_size=1, max_size=15), crash_markers, st.data())
+    def test_line_numbers_match_grep_n_even_with_stray_carriage_returns(self, lines, marker, data):
+        texts = [text + ('\r' if cr else '') for text, cr in lines]
+        position = data.draw(st.integers(0, len(texts)))
+        texts.insert(position, marker[1])
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'node1.err')
+            with open(path, 'w', newline='') as handle:
+                handle.write('\n'.join(texts) + '\n')
+            findings = error_log.scan_error_log(path, [])
+        self.assertEqual([number for number, _, _ in findings], [position + 1])
+
+
+class TestFormatFindingsProperties(unittest.TestCase):
+
+    @given(st.dictionaries(words, st.integers(1, 40), min_size=1, max_size=4))
+    def test_each_file_shows_at_most_the_cap_then_a_count_of_the_rest(self, counts):
+        results = {path: [(n, 'assertion failure', 'line ' + str(n)) for n in range(1, count + 1)]
+                   for path, count in counts.items()}
+        lines = error_log.format_findings(results)
+        cap = error_log.MAX_FINDINGS_PER_FILE
+        expected_length = sum(1 + min(count, cap) + (1 if count > cap else 0) for count in counts.values())
+        self.assertEqual(len(lines), expected_length)
+        for path, count in counts.items():
+            if count > cap:
+                self.assertIn('  ... ' + str(count - cap) + ' more', lines)
+
+
+# Path spellings: the same directory written with doubled slashes or "./".
+def spellings(path):
+    parts = [part for part in path.split('/') if part]
+    return st.lists(st.sampled_from(['/', '//', '/./']), min_size=len(parts), max_size=len(parts)).map(
+        lambda seps: ''.join(sep + part for sep, part in zip(seps, parts)))
+
+
+class TestWorkerServerPidsProperties(unittest.TestCase):
+
+    @given(st.lists(st.tuples(st.sampled_from(['/qa', '/qa/w1', '/qa/w2', '/other']),
+                              st.sampled_from(['conf', 'conf/sub', 'log']), words), max_size=6),
+           st.sampled_from(['/qa', '/qa/w1', '/qa/w2']), st.data())
+    def test_a_server_belongs_to_the_worker_whose_conf_dir_holds_its_config(self, servers, worker, data):
+        listing = ''
+        for pid, (base, sub, name) in enumerate(servers, 100):
+            conf = data.draw(spellings(base + '/' + sub + '/' + name + '.cnf'))
+            listing += str(pid) + ' /pxc/bin/mysqld --defaults-file=' + conf + ' --datadir=/x\n'
+        worker_spelling = data.draw(spellings(worker)) + data.draw(st.sampled_from(['', '/']))
+        with mock.patch.object(error_log.processes.subprocess, 'run', return_value=mock.Mock(stdout=listing)):
+            pids = error_log.worker_server_pids(worker_spelling)
+        self.assertEqual(pids, [pid for pid, (base, sub, _) in enumerate(servers, 100)
+                                if base == worker and sub == 'conf'])
+
+
 if __name__ == '__main__':
     unittest.main()

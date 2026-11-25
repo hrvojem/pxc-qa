@@ -36,6 +36,7 @@ def set_base_dir(server_version : Version):
         base_dir = PXC_UPPER_BASE
 
 def ps_allocate_ports(worker_id, node_number):
+    utility.check_node_number(node_number, utility.MAX_PS_NODES_PER_WORKER, "PS")
     base = worker_port_band_base(worker_id) + PS_PORT_SUB_BASE + (node_number - 1) * NODE_PORT_STRIDE
     end = base + NODE_PORT_STRIDE - 1
     try:

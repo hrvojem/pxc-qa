@@ -6,6 +6,7 @@ import os
 import argparse
 import concurrent.futures
 import queue
+import shlex
 import shutil
 import subprocess
 import sys
@@ -65,7 +66,8 @@ def get_disabled_tests(scriptdir):
     disabled_any_suite = set()
     if not os.path.isfile(disabled_file):
         return disabled_qualified, disabled_any_suite
-    with open(disabled_file, 'r') as handle:
+    # utf-8-sig: a byte-order mark (added by some editors) must not stick to the first entry.
+    with open(disabled_file, 'r', encoding='utf-8-sig') as handle:
         for line in handle:
             entry = line.strip()
             if not entry or entry.startswith('#'):
@@ -273,8 +275,8 @@ def handle_test_result(tc_output, worker_id, suite_name, file, result, duration=
     if result != 0 and result != SKIP_TEST_EXIT_CODE:
         workdir = get_worker_thread_dir(worker_id)
         print_failed_test_log(tc_output, workdir, file)
-        os.system('tar -czf ' + workdir + '/failed_logs/' + suite_name + '_' +
-                  file + '.tar.gz ' + workdir + '/log/*')
+        archive = workdir + '/failed_logs/' + suite_name + '_' + file + '.tar.gz'
+        os.system('tar -czf ' + shlex.quote(archive) + ' ' + shlex.quote(workdir + '/log') + '/*')
     return result != 0 and result != SKIP_TEST_EXIT_CODE
 
 

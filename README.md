@@ -14,7 +14,7 @@ Prerequisites
 
 Before running the framework, make sure the test host has:
 
-- Python 3.
+- Python 3.9 or newer.
 - `mysql.connector` available to Python.
 - A PXC or PS binary tarball extracted on disk.
 - `socat` in `PATH` for PXC clusters with more than one node (used by xtrabackup-v2 SST).
@@ -24,6 +24,29 @@ Before running the framework, make sure the test host has:
 
 The configured MySQL user is usually `root`, and the test servers are started
 with local sockets inside the framework work directory.
+
+Memory requirements
+------------------------------------------------------------------------------
+
+Some suites give every node a large InnoDB buffer pool. With the default of
+three PXC nodes, the buffer pools alone need:
+
+| Suite / tests | Buffer pool per node | 3 PXC nodes |
+|---|---|---|
+| `sysbench_run` (`sysbench_oltp_test`, `sysbench_read_only_test`, `sysbench_customized_dataload_test`) | 8G | 24G |
+| `loadtest` (`sysbench_load_test`, `sysbench_random_load_test`, `sysbench_wsrep_provider_option_random_test`) | 2G | 6G |
+| `galera_sr` (`galera_basic_sr_qa`, `thread_pool_qa`) | 2G | 6G |
+| All other tests | InnoDB default (128M) | small |
+
+Add memory for the data itself: if `workdir` is in `/dev/shm` (the default),
+the data directories are held in RAM as well, and the large sysbench loads
+(for example `sysbench_load_test` with 128 tables) need several more GB per
+node. On a smaller host, point `workdir` at a disk directory.
+
+Without enough memory the kernel's OOM killer stops a mysqld during the test,
+which looks like a node that never starts or never syncs. Before starting the
+nodes, each test prints a warning when the buffer pools alone exceed the
+host's available memory.
 
 Configuration
 ------------------------------------------------------------------------------
@@ -43,6 +66,7 @@ pstress_bin = /dev/shm/qa/pstress/src/pstress-pxc
 pstress_grammar_file = /dev/shm/qa/pstress/src/grammar.sql
 
 [sysbench]
+sysbench_dir = /usr/local/share/sysbench
 sysbench_user = sysbench
 sysbench_pass = sysbench
 sysbench_db = sbtest
@@ -216,7 +240,10 @@ Unit Tests
 ------------------------------------------------------------------------------
 
 The framework's own helpers have unit tests in `test/` that need no server.
-Run them from the repository root (`config.py` reads `./config.ini`):
+Many are property-based tests written with [Hypothesis](https://hypothesis.readthedocs.io/),
+which generate thousands of inputs per property and shrink any failure to a
+minimal example. Install it first (`python3 -m pip install hypothesis`), then
+run the tests from the repository root (`config.py` reads `./config.ini`):
 
 ```bash
 for t in test/test_*.py; do [ "$t" = test/test_startup.py ] || python3 "$t"; done
@@ -225,6 +252,11 @@ for t in test/test_*.py; do [ "$t" = test/test_startup.py ] || python3 "$t"; don
 Run each file directly rather than with `python3 -m unittest test....`, which
 can pick up Python's own `test` package. `test/test_startup.py` is excluded
 because it drives a real cluster.
+
+Property tests run 1,000 examples each by default. Set
+`HYPOTHESIS_PROFILE=thorough` for 10,000 (about six minutes in total). A
+failure prints the shrunk example and is replayed first on the next run from
+the local `.hypothesis/` directory.
 
 GitHub Actions runs these tests, plus a compile check of every Python file
 with warnings treated as errors, on Python 3.9 and 3.12 for every push and
