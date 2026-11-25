@@ -151,6 +151,25 @@ def setup_local_keyring(worker_id: int, node_number: int):
         json.dump({"path": component_keyring_file_path(worker_id, node_number), "read_only": False}, cnf_file, indent=2)
         cnf_file.write('\n')
 
+def append_lines(path: str, lines: list):
+    """ Append `lines` to `path`, starting on a new line even if the file
+        doesn't end with one (otherwise the first option would be glued to
+        the last line, e.g. "[mysqld]option=value").
+    """
+    needs_newline = False
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        # Check the last byte in binary mode: seeking back one position in text
+        # mode can land inside a multi-byte character.
+        with open(path, 'rb') as handle:
+            handle.seek(-1, os.SEEK_END)
+            needs_newline = handle.read(1) != b'\n'
+    with open(path, 'a') as handle:
+        if needs_newline:
+            handle.write('\n')
+        for line in lines:
+            handle.write(line + '\n')
+
+
 def add_section_options(conf_file: str, section: str, options: dict):
     """ Add options to a cnf file's [section], reusing the section if it
         already exists instead of appending a second copy of it.
@@ -189,10 +208,7 @@ class StartCluster:
 
 
     def add_conf(self, option_values: dict):
-        cnf_name = open(self.__workdir_custom_cnf, 'a+')
-        for opt in option_values:
-            cnf_name.write(opt + '=' + option_values[opt] + '\n')
-        cnf_name.close()
+        append_lines(self.__workdir_custom_cnf, [opt + '=' + str(option_values[opt]) for opt in option_values])
 
     def kill_mysqld(self):
         # kill existing mysqld process

@@ -31,6 +31,65 @@ Start a cluster manually with the utility script:
 python3 util/pxc_util.py --start --debug
 ```
 
+Random mysqld option combinations
+---------------------------------
+
+`random_mysqld_option_test.py` uses [Hypothesis](https://hypothesis.readthedocs.io/)
+to draw combinations of options from `conf/mysql_options_pxc80.txt` (only the
+options the configured mysqld reports in `mysqld --verbose --help`). For each
+combination it starts a 3-node cluster with the options in every node's
+config, loads data (sysbench, prepared statements, random tables), compares
+the nodes and shuts down. Every combination must satisfy:
+
+1. no node crashes (no crash marker in any node's error log);
+2. if the cluster starts, every node ends with the same data;
+3. every node shuts down within the shutdown timeout;
+4. if node1 starts with the options, the other nodes can join it.
+
+A combination mysqld refuses at startup, or under which the data load fails
+cleanly, is recorded with the first `[ERROR]` line as the reason but is not a
+failure. When a combination fails, Hypothesis shrinks it to the smallest
+combination that still fails and prints it ("Falsifying example" or "Failing
+test case"). The failing example is saved in `.hypothesis/` and tried first
+on the next run.
+
+The test needs Hypothesis (`python3 -m pip install hypothesis`) and takes about
+1-1.5 minutes per combination. Environment variables:
+
+- `PXC_OPTION_EXAMPLES`: combinations to try (default 10).
+- `PXC_OPTION_MAX`: most options in one combination (default 6).
+- `PXC_OPTION_SEED`: a fixed seed, to repeat a run exactly.
+
+`EXCLUDED_OPTIONS` in the test lists options left out of the draw and why
+(options that make mysqld exit, debug-build options, options that disable
+Galera's consistency guarantees). `KNOWN_ISSUES` lists option values that
+currently fail, so the test keeps looking for new problems. Today that is
+`character-set-filesystem` set to `utf16`, `utf16le`, `ucs2` or `utf32`:
+mysqld starts, but xtrabackup fails as SST donor ("cannot my_setwd"), so no
+node can join.
+
+Example output (PXC 8.4.8):
+
+```
+Trying options: character-set-filesystem=big5, innodb-flush-method=nosync, innodb-fsync-threshold=0, innodb-sched-priority-io=16, secondary-engine-cost-threshold=1048576
+  -> refused at startup: node1: unknown variable 'innodb-sched-priority-io=16'.
+Trying options: delay-key-write=0, external-locking=0, ngram=0, old-alter-table=1
+  -> started, data loaded
+Combinations tried (including shrinking): 20 {'refused at startup': 4, 'started, data loaded': 16}
+```
+
+Shrinking a failure to the option that causes it (before the
+`character-set-filesystem` values were listed as a known issue):
+
+```
+Trying options: back-log=0, character-set-filesystem=utf16, delay-key-write=1, net-read-timeout=16, regexp-time-limit=1024, relay-log-purge=1
+  -> node1 started but a node could not join: node1: xtrabackup finished with error: 1.  Check /dev/shm/qa_options/node1//innobackup.backup.log
+Trying options: character-set-filesystem=utf16
+  -> node1 started but a node could not join: node1: xtrabackup finished with error: 1.  Check /dev/shm/qa_options/node1//innobackup.backup.log
+Trying options: delay-key-write=1, relay-log-purge=1
+  -> started, data loaded
+```
+
 Random QA run log
 --------------
 ```
@@ -55,115 +114,6 @@ $ python3 util/pxc_util.py --start --debug
 	/dev/shm/qa/Percona-XtraDB-Cluster_8.0.26-16.1_Linux.x86_64.glibc2.17/bin/mysql --user=root --socket=/dev/shm/qa/node1/mysql.sock
 	/dev/shm/qa/Percona-XtraDB-Cluster_8.0.26-16.1_Linux.x86_64.glibc2.17/bin/mysql --user=root --socket=/dev/shm/qa/node2/mysql.sock
 	/dev/shm/qa/Percona-XtraDB-Cluster_8.0.26-16.1_Linux.x86_64.glibc2.17/bin/mysql --user=root --socket=/dev/shm/qa/node3/mysql.sock
-
-
-$ python3 qa_framework.py --tests=random_qa.random_mysqld_option_test.py
-------------------------------
-PXC Random MySQLD options test
-------------------------------
-06:08:01  Startup sanity check                                                                                [ ✓ ]
-06:08:01  Configuration file creation                                                                         [ ✓ ]
-06:08:01  Added random mysqld option: abort-slave-event-count=0
-                                              [ ✓ ]
-06:08:41  Initializing cluster                                                                                [ ✓ ]
-06:09:41  Cluster startup                                                                                     [ ✓ ]
-06:09:41  Database connection                                                                                 [ ✓ ]
-06:09:41  Sysbench run sanity check                                                                           [ ✓ ]
-06:09:46  Sysbench data load                                                                                  [ ✓ ]
-06:09:56  Creating prepared statements                                                                        [ ✓ ]
-06:09:59  Sample data load                                                                                    [ ✓ ]
-06:10:12  PXC: shutting down cluster node3                                                                    [ ✓ ]
-06:10:26  PXC: shutting down cluster node2                                                                    [ ✓ ]
-06:10:40  PXC: shutting down cluster node1                                                                    [ ✓ ]
-06:10:40  Startup sanity check                                                                                [ ✓ ]
-06:10:40  Configuration file creation                                                                         [ ✓ ]
-06:10:40  Added random mysqld option: abort-slave-event-count=2
-                                              [ ✓ ]
-06:11:20  Initializing cluster                                                                                [ ✓ ]
-06:12:18  Cluster startup                                                                                     [ ✓ ]
-06:12:18  Database connection                                                                                 [ ✓ ]
-06:12:18  Sysbench run sanity check                                                                           [ ✓ ]
-06:12:23  Sysbench data load                                                                                  [ ✓ ]
-06:12:34  Creating prepared statements                                                                        [ ✓ ]
-06:12:37  Sample data load                                                                                    [ ✓ ]
-06:12:51  PXC: shutting down cluster node3                                                                    [ ✓ ]
-06:13:05  PXC: shutting down cluster node2                                                                    [ ✓ ]
-06:13:19  PXC: shutting down cluster node1                                                                    [ ✓ ]
-06:13:19  Startup sanity check                                                                                [ ✓ ]
-06:13:19  Configuration file creation                                                                         [ ✓ ]
-06:13:19  Added random mysqld option: activate-all-roles-on-login=1
-                                          [ ✓ ]
-06:13:59  Initializing cluster                                                                                [ ✓ ]
-06:14:58  Cluster startup                                                                                     [ ✓ ]
-06:14:58  Database connection                                                                                 [ ✓ ]
-06:14:58  Sysbench run sanity check                                                                           [ ✓ ]
-06:15:02  Sysbench data load                                                                                  [ ✓ ]
-06:15:13  Creating prepared statements                                                                        [ ✓ ]
-06:15:16  Sample data load                                                                                    [ ✓ ]
-06:15:30  PXC: shutting down cluster node3                                                                    [ ✓ ]
-06:15:45  PXC: shutting down cluster node2                                                                    [ ✓ ]
-06:15:59  PXC: shutting down cluster node1                                                                    [ ✓ ]
-06:15:59  Startup sanity check                                                                                [ ✓ ]
-06:15:59  Configuration file creation                                                                         [ ✓ ]
-06:15:59  Added random mysqld option: activate-all-roles-on-login=0
-                                          [ ✓ ]
-06:16:39  Initializing cluster                                                                                [ ✓ ]
-06:17:38  Cluster startup                                                                                     [ ✓ ]
-06:17:38  Database connection                                                                                 [ ✓ ]
-06:17:38  Sysbench run sanity check                                                                           [ ✓ ]
-06:17:42  Sysbench data load                                                                                  [ ✓ ]
-06:17:54  Creating prepared statements                                                                        [ ✓ ]
-06:17:57  Sample data load                                                                                    [ ✓ ]
-06:18:11  PXC: shutting down cluster node3                                                                    [ ✓ ]
-06:18:26  PXC: shutting down cluster node2                                                                    [ ✓ ]
-06:18:40  PXC: shutting down cluster node1                                                                    [ ✓ ]
-06:18:40  Startup sanity check                                                                                [ ✓ ]
-06:18:40  Configuration file creation                                                                         [ ✓ ]
-06:18:40  Added random mysqld option: allow-suspicious-udfs=1
-                                                [ ✓ ]
-06:19:21  Initializing cluster                                                                                [ ✓ ]
-06:20:20  Cluster startup                                                                                     [ ✓ ]
-06:20:20  Database connection                                                                                 [ ✓ ]
-06:20:20  Sysbench run sanity check                                                                           [ ✓ ]
-06:20:24  Sysbench data load                                                                                  [ ✓ ]
-06:20:34  Creating prepared statements                                                                        [ ✓ ]
-06:20:38  Sample data load                                                                                    [ ✓ ]
-06:20:52  PXC: shutting down cluster node3                                                                    [ ✓ ]
-06:21:07  PXC: shutting down cluster node2                                                                    [ ✓ ]
-06:21:21  PXC: shutting down cluster node1                                                                    [ ✓ ]
-06:21:21  Startup sanity check                                                                                [ ✓ ]
-06:21:21  Configuration file creation                                                                         [ ✓ ]
-06:21:21  Added random mysqld option: allow-suspicious-udfs=0
-                                                [ ✓ ]
-06:22:01  Initializing cluster                                                                                [ ✓ ]
-06:23:00  Cluster startup                                                                                     [ ✓ ]
-06:23:00  Database connection                                                                                 [ ✓ ]
-06:23:00  Sysbench run sanity check                                                                           [ ✓ ]
-06:23:04  Sysbench data load                                                                                  [ ✓ ]
-06:23:15  Creating prepared statements                                                                        [ ✓ ]
-06:23:18  Sample data load                                                                                    [ ✓ ]
-06:23:32  PXC: shutting down cluster node3                                                                    [ ✓ ]
-06:23:46  PXC: shutting down cluster node2                                                                    [ ✓ ]
-06:24:00  PXC: shutting down cluster node1                                                                    [ ✓ ]
-06:24:00  Startup sanity check                                                                                [ ✓ ]
-06:24:00  Configuration file creation                                                                         [ ✓ ]
-06:24:00  Added random mysqld option: archive=1
-                                                              [ ✓ ]
-06:24:40  Initializing cluster                                                                                [ ✓ ]
-06:25:37  Cluster startup                                                                                     [ ✓ ]
-06:25:37  Database connection                                                                                 [ ✓ ]
-06:25:37  Sysbench run sanity check                                                                           [ ✓ ]
-06:25:42  Sysbench data load                                                                                  [ ✓ ]
-06:25:53  Creating prepared statements                                                                        [ ✓ ]
-06:25:56  Sample data load                                                                                    [ ✓ ]
-06:26:09  PXC: shutting down cluster node3                                                                    [ ✓ ]
-06:26:24  PXC: shutting down cluster node2                                                                    [ ✓ ]
-06:26:38  PXC: shutting down cluster node1                                                                    [ ✓ ]
-06:26:38  Startup sanity check                                                                                [ ✓ ]
-06:26:38  Configuration file creation                                                                         [ ✓ ]
-06:26:38  Added random mysqld option: archive=0
-                                                              [ ✓ ]
-[...]
 
 
 $ python3 qa_framework.py --tests=random_qa.pstress_crash_recovery_qa.py
