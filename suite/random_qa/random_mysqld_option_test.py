@@ -74,7 +74,8 @@ EXCLUDED_OPTIONS = {
     'sporadic-binlog-dump-fail': 'debug-build fault injection',
 }
 # Known issues: option values excluded until the bug they trigger is fixed, so the
-# test keeps looking for new problems. Each one fails property 4 on PXC 8.4.8.
+# test keeps looking for new problems. Each one fails property 4 on PXC 8.4.8 and
+# 8.4.11-12 (the latest package as of 2026-11-25).
 KNOWN_ISSUES = {
     # xtrabackup applies the server's character_set_filesystem to its own paths,
     # so as SST donor it fails with "cannot my_setwd" and a garbled datadir path,

@@ -66,7 +66,7 @@ Galera's consistency guarantees). `KNOWN_ISSUES` lists option values that
 currently fail, so the test keeps looking for new problems. Today that is
 `character-set-filesystem` set to `utf16`, `utf16le`, `ucs2` or `utf32`:
 mysqld starts, but xtrabackup fails as SST donor ("cannot my_setwd"), so no
-node can join.
+node can join (seen on PXC 8.4.8 and 8.4.11-12).
 
 Example output (PXC 8.4.8):
 
